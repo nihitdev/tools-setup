@@ -119,6 +119,8 @@ $script:Installed = @{}
 $script:Installing = $false
 $script:Populating = $false
 $script:LogFile = Join-Path $env:TEMP ("scoop-setup-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+$script:SearchPlaceholderText = "Search packages..."
+$script:SearchPlaceholderVisible = $false
 
 foreach ($app in $script:Apps) { $script:Selected[$app.N] = $app.Default }
 
@@ -240,12 +242,17 @@ function Refresh-Installed {
     $scoop = Get-Scoop
 
     if (-not $scoop) {
-        $scoopStatus.Text = "Scoop: not installed yet"
+        $scoopStatus.Text = "Scoop: not installed - ready to set up"
+        $scoopStatus.ForeColor = [System.Drawing.Color]::Khaki
+        $bucketStatus.Text = "Buckets: will be added automatically"
+        $bucketStatus.ForeColor = $muted
         Refresh-List
         return
     }
 
-    $scoopStatus.Text = "Scoop: detected"
+    $root = Get-ScoopRoot
+    $scoopStatus.Text = if ($root) { "Scoop: detected ($root)" } else { "Scoop: detected" }
+    $scoopStatus.ForeColor = [System.Drawing.Color]::LightGreen
 
     try {
         foreach ($line in (& $scoop list 2>&1)) {
@@ -254,14 +261,20 @@ function Refresh-Installed {
                 $script:Installed[$Matches.name.ToLowerInvariant()] = $true
             }
         }
-    } catch {}
+    } catch {
+        Ui-Log "Could not refresh installed apps: $($_.Exception.Message)" ([System.Drawing.Color]::Orange)
+    }
+
+    $buckets = @(Get-InstalledBuckets)
+    $bucketStatus.Text = "Buckets: $($buckets.Count) ready | Catalog: $($script:Apps.Count) packages"
+    $bucketStatus.ForeColor = [System.Drawing.Color]::LightSkyBlue
 
     Refresh-List
 }
 
 function Get-FilteredApps {
     $category = $categoryBox.SelectedItem.ToString()
-    $search = $searchBox.Text.Trim()
+    $search = if ($script:SearchPlaceholderVisible) { "" } else { $searchBox.Text.Trim() }
 
     @($script:Apps | Where-Object {
         (($category -eq "All") -or ($_.C -eq $category)) -and
@@ -273,7 +286,7 @@ function Get-FilteredApps {
 
 function Update-SelectedCount {
     $count = @($script:Apps | Where-Object { $script:Selected[$_.N] }).Count
-    $selectedLabel.Text = "$count of $($script:Apps.Count) selected"
+    $selectedLabel.Text = "$count / $($script:Apps.Count) packages selected"
     $installButton.Enabled = (-not $script:Installing) -and $count -gt 0
 }
 
@@ -300,12 +313,36 @@ function Refresh-List {
         [void]$item.SubItems.Add($app.D)
         $item.Checked = [bool]$script:Selected[$app.N]
         $item.Tag = $app
+        $item.UseItemStyleForSubItems = $false
 
-        if ($status -eq "Installed") {
-            $item.ForeColor = [System.Drawing.Color]::FromArgb(130, 225, 160)
+        switch ($status) {
+            "Installed" {
+                $item.SubItems[0].ForeColor = [System.Drawing.Color]::FromArgb(150, 230, 170)
+                $item.SubItems[3].ForeColor = [System.Drawing.Color]::FromArgb(150, 230, 170)
+            }
+            "Toolchain" {
+                $item.SubItems[3].ForeColor = [System.Drawing.Color]::LightSkyBlue
+            }
+            default {
+                $item.SubItems[3].ForeColor = [System.Drawing.Color]::Khaki
+            }
         }
 
         [void]$list.Items.Add($item)
+    }
+
+    # Fit the practical columns to content, then let the description use remaining space.
+    if ($list.Items.Count -gt 0) {
+        $list.AutoResizeColumn(0, [System.Windows.Forms.ColumnHeaderAutoResizeStyle]::ColumnContent)
+        $list.AutoResizeColumn(1, [System.Windows.Forms.ColumnHeaderAutoResizeStyle]::HeaderSize)
+        $list.AutoResizeColumn(2, [System.Windows.Forms.ColumnHeaderAutoResizeStyle]::HeaderSize)
+        $list.AutoResizeColumn(3, [System.Windows.Forms.ColumnHeaderAutoResizeStyle]::HeaderSize)
+        $list.Columns[0].Width = [Math]::Max(145, [Math]::Min(175, $list.Columns[0].Width + 10))
+        $list.Columns[1].Width = [Math]::Max(100, $list.Columns[1].Width + 10)
+        $list.Columns[2].Width = [Math]::Max(85, $list.Columns[2].Width + 10)
+        $list.Columns[3].Width = [Math]::Max(105, $list.Columns[3].Width + 10)
+        $used = $list.Columns[0].Width + $list.Columns[1].Width + $list.Columns[2].Width + $list.Columns[3].Width
+        $list.Columns[4].Width = [Math]::Max(240, $list.ClientSize.Width - $used - 8)
     }
 
     $list.EndUpdate()
@@ -322,6 +359,8 @@ function Set-UiLocked {
     $clearButton.Enabled = -not $Locked
     $refreshButton.Enabled = -not $Locked
     $openButton.Enabled = -not $Locked
+    $exportButton.Enabled = -not $Locked
+    $importButton.Enabled = -not $Locked
     $categoryBox.Enabled = -not $Locked
     $searchBox.Enabled = -not $Locked
     $list.Enabled = -not $Locked
@@ -451,6 +490,9 @@ $red = [System.Drawing.Color]::FromArgb(196, 48, 55)
 $redDark = [System.Drawing.Color]::FromArgb(121, 24, 31)
 $textColor = [System.Drawing.Color]::FromArgb(235, 235, 240)
 $muted = [System.Drawing.Color]::FromArgb(175, 175, 188)
+$success = [System.Drawing.Color]::FromArgb(150, 230, 170)
+$warning = [System.Drawing.Color]::Khaki
+$danger = [System.Drawing.Color]::Tomato
 
 function New-Button {
     param([string]$Text, [int]$X, [int]$Y, [int]$W, [int]$H, [System.Drawing.Color]$Color)
@@ -469,8 +511,9 @@ function New-Button {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Scoop Setup"
-$form.Size = New-Object System.Drawing.Size(1210, 780)
-$form.MinimumSize = New-Object System.Drawing.Size(1100, 700)
+# Fits on a 1366x768 display without hiding the install button behind the taskbar.
+$form.ClientSize = New-Object System.Drawing.Size(1200, 660)
+$form.MinimumSize = New-Object System.Drawing.Size(1060, 650)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = $bg
 $form.ForeColor = $textColor
@@ -478,7 +521,7 @@ $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $header = New-Object System.Windows.Forms.Panel
 $header.Dock = "Top"
-$header.Height = 98
+$header.Height = 90
 $header.BackColor = $redDark
 $form.Controls.Add($header)
 
@@ -487,15 +530,15 @@ $title.Text = "SCOOP SETUP"
 $title.AutoSize = $true
 $title.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 22)
 $title.ForeColor = [System.Drawing.Color]::White
-$title.Location = New-Object System.Drawing.Point(25, 15)
+$title.Location = New-Object System.Drawing.Point(25, 13)
 $header.Controls.Add($title)
 
 $sub = New-Object System.Windows.Forms.Label
-$sub.Text = "Choose tools • Buckets are automatic • Existing apps are safe to reselect"
+$sub.Text = "Choose tools - Buckets are automatic - Existing apps are safe to reselect"
 $sub.AutoSize = $true
 $sub.ForeColor = [System.Drawing.Color]::FromArgb(255, 225, 225)
 $sub.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-$sub.Location = New-Object System.Drawing.Point(29, 60)
+$sub.Location = New-Object System.Drawing.Point(29, 57)
 $header.Controls.Add($sub)
 
 $target = if (Test-Path "D:\") { "D:\Scoop" } else { "C:\Scoop" }
@@ -504,11 +547,12 @@ $targetText.Text = "NEW SCOOP TARGET: $target"
 $targetText.AutoSize = $true
 $targetText.ForeColor = [System.Drawing.Color]::White
 $targetText.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
-$targetText.Location = New-Object System.Drawing.Point(890, 28)
+$targetText.Location = New-Object System.Drawing.Point(850, 27)
+$targetText.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $header.Controls.Add($targetText)
 
 $filterPanel = New-Object System.Windows.Forms.Panel
-$filterPanel.Location = New-Object System.Drawing.Point(20, 115)
+$filterPanel.Location = New-Object System.Drawing.Point(20, 102)
 $filterPanel.Size = New-Object System.Drawing.Size(800, 58)
 $filterPanel.BackColor = $panelColor
 $form.Controls.Add($filterPanel)
@@ -546,6 +590,11 @@ $searchBox.ForeColor = $textColor
 $searchBox.BorderStyle = "FixedSingle"
 $filterPanel.Controls.Add($searchBox)
 
+# Native WinForms TextBox has no placeholder property, so use a safe focus-based watermark.
+$searchBox.Text = $script:SearchPlaceholderText
+$searchBox.ForeColor = $muted
+$script:SearchPlaceholderVisible = $true
+
 $selectedLabel = New-Object System.Windows.Forms.Label
 $selectedLabel.AutoSize = $true
 $selectedLabel.ForeColor = [System.Drawing.Color]::LightSkyBlue
@@ -554,8 +603,8 @@ $selectedLabel.Location = New-Object System.Drawing.Point(605, 20)
 $filterPanel.Controls.Add($selectedLabel)
 
 $list = New-Object System.Windows.Forms.ListView
-$list.Location = New-Object System.Drawing.Point(20, 185)
-$list.Size = New-Object System.Drawing.Size(800, 390)
+$list.Location = New-Object System.Drawing.Point(20, 168)
+$list.Size = New-Object System.Drawing.Size(800, 300)
 $list.View = "Details"
 $list.CheckBoxes = $true
 $list.FullRowSelect = $true
@@ -564,16 +613,16 @@ $list.MultiSelect = $false
 $list.BackColor = $panelColor
 $list.ForeColor = $textColor
 $list.BorderStyle = "FixedSingle"
-[void]$list.Columns.Add("Tool", 165)
-[void]$list.Columns.Add("Category", 110)
-[void]$list.Columns.Add("Bucket", 95)
+[void]$list.Columns.Add("Tool", 145)
+[void]$list.Columns.Add("Category", 100)
+[void]$list.Columns.Add("Bucket", 85)
 [void]$list.Columns.Add("Status", 105)
-[void]$list.Columns.Add("What it does", 305)
+[void]$list.Columns.Add("What it does", 360)
 $form.Controls.Add($list)
 
 $side = New-Object System.Windows.Forms.Panel
-$side.Location = New-Object System.Drawing.Point(840, 115)
-$side.Size = New-Object System.Drawing.Size(335, 460)
+$side.Location = New-Object System.Drawing.Point(840, 102)
+$side.Size = New-Object System.Drawing.Size(335, 366)
 $side.BackColor = $panelColor
 $form.Controls.Add($side)
 
@@ -586,16 +635,17 @@ $sideTitle.Location = New-Object System.Drawing.Point(18, 17)
 $side.Controls.Add($sideTitle)
 
 $info = New-Object System.Windows.Forms.Label
+$check = [char]0x2713
 $info.Text = @"
-• Existing Scoop is kept.
-• New Scoop: D:\Scoop or C:\Scoop.
-• Required buckets are added.
-• Node LTS and Latest are exclusive.
-• Rust stable uses rustup.
-• Docker here means Docker CLI.
+$check Existing Scoop installation is preserved.
+$check New Scoop target: D:\Scoop or C:\Scoop.
+$check Required buckets are added automatically.
+$check Node LTS and Latest are mutually exclusive.
+$check Rust stable is installed through rustup.
+$check Docker means Docker CLI only.
 "@
-$info.Location = New-Object System.Drawing.Point(18, 58)
-$info.Size = New-Object System.Drawing.Size(298, 155)
+$info.Location = New-Object System.Drawing.Point(18, 52)
+$info.Size = New-Object System.Drawing.Size(298, 116)
 $info.ForeColor = $muted
 $side.Controls.Add($info)
 
@@ -606,32 +656,32 @@ $tooltip.InitialDelay = 300
 $tooltip.ReshowDelay = 100
 $tooltip.ShowAlways = $true
 
-$allButton = New-Button "SELECT ALL" 18 230 142 36 $inputColor
+$allButton = New-Button "SELECT ALL" 18 180 142 36 $inputColor
 $side.Controls.Add($allButton)
 $tooltip.SetToolTip($allButton, "Select all listed tools")
 
-$devButton = New-Button "DEV PROFILE" 175 230 142 36 $inputColor
+$devButton = New-Button "DEV PROFILE" 175 180 142 36 $inputColor
 $side.Controls.Add($devButton)
 $tooltip.SetToolTip($devButton, "Select a common development toolset")
 
-$clearButton = New-Button "CLEAR SELECTION" 18 276 299 36 $inputColor
+$clearButton = New-Button "CLEAR SELECTION" 18 226 299 36 $inputColor
 $side.Controls.Add($clearButton)
 $tooltip.SetToolTip($clearButton, "Clear all selections")
 
-$refreshButton = New-Button "REFRESH INSTALLED STATUS" 18 330 299 36 $inputColor
+$refreshButton = New-Button "REFRESH INSTALLED STATUS" 18 272 299 36 $inputColor
 $side.Controls.Add($refreshButton)
 $tooltip.SetToolTip($refreshButton, "Refresh detected installed apps and status")
 
-$openButton = New-Button "OPEN SCOOP FOLDER" 18 385 142 36 $inputColor
+$openButton = New-Button "OPEN SCOOP FOLDER" 18 318 142 36 $inputColor
 $side.Controls.Add($openButton)
 $tooltip.SetToolTip($openButton, "Open the Scoop installation folder in Explorer")
 
 # Export / Import selection buttons
-$exportButton = New-Button "EXPORT" 175 385 68 36 $inputColor
+$exportButton = New-Button "EXPORT" 175 318 68 36 $inputColor
 $side.Controls.Add($exportButton)
 $tooltip.SetToolTip($exportButton, "Export current selection to Documents\\scoop-selection.json")
 
-$importButton = New-Button "IMPORT" 249 385 68 36 $inputColor
+$importButton = New-Button "IMPORT" 249 318 68 36 $inputColor
 $side.Controls.Add($importButton)
 $tooltip.SetToolTip($importButton, "Import selection from Documents\\scoop-selection.json")
 
@@ -640,12 +690,12 @@ $logTitle.Text = "LIVE INSTALL LOG"
 $logTitle.AutoSize = $true
 $logTitle.ForeColor = $muted
 $logTitle.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
-$logTitle.Location = New-Object System.Drawing.Point(20, 592)
+$logTitle.Location = New-Object System.Drawing.Point(20, 484)
 $form.Controls.Add($logTitle)
 
 $log = New-Object System.Windows.Forms.RichTextBox
-$log.Location = New-Object System.Drawing.Point(20, 616)
-$log.Size = New-Object System.Drawing.Size(800, 110)
+$log.Location = New-Object System.Drawing.Point(20, 508)
+$log.Size = New-Object System.Drawing.Size(800, 116)
 $log.ReadOnly = $true
 $log.BackColor = [System.Drawing.Color]::FromArgb(12, 12, 15)
 $log.ForeColor = [System.Drawing.Color]::Gainsboro
@@ -654,30 +704,64 @@ $log.Font = New-Object System.Drawing.Font("Consolas", 8.5)
 $form.Controls.Add($log)
 
 $progress = New-Object System.Windows.Forms.ProgressBar
-$progress.Location = New-Object System.Drawing.Point(840, 620)
+$progress.Location = New-Object System.Drawing.Point(840, 486)
 $progress.Size = New-Object System.Drawing.Size(335, 21)
 $form.Controls.Add($progress)
 
 $progressLabel = New-Object System.Windows.Forms.Label
 $progressLabel.Text = "Ready. Select tools, then click Install selected."
-$progressLabel.Location = New-Object System.Drawing.Point(840, 650)
-$progressLabel.Size = New-Object System.Drawing.Size(335, 42)
+$progressLabel.Location = New-Object System.Drawing.Point(840, 516)
+$progressLabel.Size = New-Object System.Drawing.Size(335, 36)
 $progressLabel.ForeColor = $muted
 $form.Controls.Add($progressLabel)
 
 $scoopStatus = New-Object System.Windows.Forms.Label
 $scoopStatus.Text = "Scoop: checking..."
-$scoopStatus.Location = New-Object System.Drawing.Point(840, 697)
-$scoopStatus.Size = New-Object System.Drawing.Size(335, 22)
+$scoopStatus.Location = New-Object System.Drawing.Point(840, 557)
+$scoopStatus.Size = New-Object System.Drawing.Size(335, 20)
 $scoopStatus.ForeColor = [System.Drawing.Color]::LightSkyBlue
 $form.Controls.Add($scoopStatus)
 
-$installButton = New-Button "INSTALL SELECTED" 840 732 335 38 $red
+$bucketStatus = New-Object System.Windows.Forms.Label
+$bucketStatus.Text = "Buckets: checking..."
+$bucketStatus.Location = New-Object System.Drawing.Point(840, 578)
+$bucketStatus.Size = New-Object System.Drawing.Size(335, 20)
+$bucketStatus.ForeColor = $muted
+$form.Controls.Add($bucketStatus)
+
+$installButton = New-Button "INSTALL SELECTED" 840 606 335 38 $red
 $installButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 11)
 $form.Controls.Add($installButton)
 
+$filterPanel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$list.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$side.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+$log.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+$logTitle.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+$progress.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$progressLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$scoopStatus.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$bucketStatus.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$installButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+
 $categoryBox.Add_SelectedIndexChanged({ if (-not $script:Installing) { Refresh-List } })
-$searchBox.Add_TextChanged({ if (-not $script:Installing) { Refresh-List } })
+$searchBox.Add_Enter({
+    if ($script:SearchPlaceholderVisible) {
+        $script:SearchPlaceholderVisible = $false
+        $searchBox.Text = ""
+        $searchBox.ForeColor = $textColor
+    }
+})
+$searchBox.Add_Leave({
+    if ([string]::IsNullOrWhiteSpace($searchBox.Text)) {
+        $script:SearchPlaceholderVisible = $true
+        $searchBox.Text = $script:SearchPlaceholderText
+        $searchBox.ForeColor = $muted
+    }
+})
+$searchBox.Add_TextChanged({
+    if (-not $script:Installing) { Refresh-List }
+})
 
 $list.Add_ItemCheck({
     param($sender, $e)
@@ -759,7 +843,8 @@ $importButton.Add_Click({
 $installButton.Add_Click({ Install-Selection })
 
 $form.Add_Shown({
-    Ui-Log "Scoop setup started." ([System.Drawing.Color]::LightSkyBlue)
+    Ui-Log "Scoop Setup started." ([System.Drawing.Color]::LightSkyBlue)
+    Ui-Log "Catalog loaded: $($script:Apps.Count) packages." ([System.Drawing.Color]::LightSkyBlue)
     Ui-Log "Log: $script:LogFile" ([System.Drawing.Color]::DarkGray)
     Refresh-Installed
 })

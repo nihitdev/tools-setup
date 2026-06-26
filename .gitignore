@@ -1,0 +1,33 @@
+# Windows
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# PowerShell
+*.ps1.bak
+*.psc1
+*.psm1.bak
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build & Temp
+*.log
+*.tmp
+$RECYCLE.BIN/
+
+# Scoop (local installations for testing)
+D:\Scoop/
+C:\Scoop/
+
+# Temp logs (optional - exclude installation logs)
+*.log
+
+# OS-specific
+[Tt]humbs.db
+[Dd]esktop.ini

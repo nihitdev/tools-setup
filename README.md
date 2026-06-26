@@ -60,18 +60,6 @@ Scoop Setup turns Scoop into a polished GUI installer, auto-manages buckets, det
 
 ---
 
-## Screenshots
-
-![Home](assets/screenshot-home.png)
-
-![Search](assets/screenshot-search.png)
-
-![Installing](assets/screenshot-installing.png)
-
-![Complete](assets/screenshot-complete.png)
-
----
-
 ## Architecture
 
 ```mermaid

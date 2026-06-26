@@ -1,0 +1,67 @@
+# Scoop Setup
+
+One-file PowerShell GUI to install and manage common developer tools via Scoop.
+
+This script installs Scoop if missing, adds required buckets, and installs a curated list of developer tools, utilities, fonts, and desktop apps.
+
+---
+
+## Features
+
+- Modern dark GUI
+- Automatic Scoop installation
+- Installs to `D:\Scoop` (falls back to `C:\Scoop`)
+- Adds required Scoop buckets when missing
+- Detects already installed applications
+- Multi-select installer with search and category filter
+- Live install log and progress bar
+- Rust toolchain handled via `rustup`
+- Open Scoop folder from the GUI
+
+---
+
+## Included Buckets
+
+- main
+- extras
+- nerd-fonts
+- java
+
+---
+
+## Included Software (selected highlights)
+
+- Git, 7zip, curl, jq, yq
+- fzf, fd, bat, eza, pwsh
+- VS Code, Helix, Notepad++
+- Python, Node.js (LTS), Go, Deno, Rust (via rustup)
+- Docker CLI, Docker Compose
+- Fonts: CascadiaCode, FiraCode, JetBrains Mono (nerd-fonts)
+
+---
+
+## Installation
+
+Run the script with PowerShell (recommended as Administrator):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scoop-setup.ps1
+```
+
+---
+
+## Usage Notes
+
+- Use the search box and category filter to find packages quickly.
+- Use `EXPORT` / `IMPORT` on the side panel to save and load selection files from `Documents\scoop-selection.json`.
+- The script logs activity to a timestamped file in the Temp directory.
+
+---
+
+## Contributing
+
+Pull requests are welcome. Suggest packages, improvements, or bug fixes.
+
+---
+
+MIT License

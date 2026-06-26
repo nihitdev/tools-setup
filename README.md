@@ -13,7 +13,6 @@ A polished Windows GUI for Scoop installs. Search, select, install.
 
 ![Demo](assets/demo.gif)
 
-> Replace `assets/demo.gif` with a 900×500, 10 FPS recording under 5MB.
 
 ---
 
